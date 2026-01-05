@@ -16,6 +16,7 @@ type Config struct {
 	ZoneName   string
 	RecordName string
 	APIToken   string
+	Interval   time.Duration
 }
 
 type CloudflareResponse[T any] struct {
@@ -50,28 +51,41 @@ var httpClient = &http.Client{
 const cloudflareBaseURL = "https://api.cloudflare.com/client/v4"
 
 func getEnvVars() (*Config, error) {
-	cfg := &Config{
-		ZoneName:   os.Getenv("ZONE_NAME"),
-		RecordName: os.Getenv("RECORD_NAME"),
-		APIToken:   os.Getenv("API_TOKEN"),
-	}
+	zoneName := os.Getenv("ZONE_NAME")
+	recordName := os.Getenv("RECORD_NAME")
+	apiToken := os.Getenv("API_TOKEN")
+	intervalStr := os.Getenv("INTERVAL")
 
 	var missingVars []string
-	if cfg.ZoneName == "" {
+
+	if zoneName == "" {
 		missingVars = append(missingVars, "ZONE_NAME")
 	}
-	if cfg.RecordName == "" {
+	if recordName == "" {
 		missingVars = append(missingVars, "RECORD_NAME")
 	}
-	if cfg.APIToken == "" {
+	if apiToken == "" {
 		missingVars = append(missingVars, "API_TOKEN")
+	}
+	if intervalStr == "" {
+		missingVars = append(missingVars, "INTERVAL")
 	}
 
 	if len(missingVars) > 0 {
 		return nil, fmt.Errorf("missing environment variables: %s", strings.Join(missingVars, ", "))
 	}
 
-	return cfg, nil
+	interval, err := time.ParseDuration(intervalStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid INTERVAL format (ex: 300s, 5m, 1h): %w", err)
+	}
+
+	return &Config{
+		ZoneName:   zoneName,
+		RecordName: recordName,
+		APIToken:   apiToken,
+		Interval:   interval,
+	}, nil
 }
 
 func getPublicIP() (string, error) {
@@ -211,40 +225,66 @@ func updateDNSRecord(zoneID, recordName, recordID, ip, token string) error {
 	return nil
 }
 
+func run(cfg *Config) error {
+	publicIP, err := getPublicIP()
+	if err != nil {
+		return err
+	}
+
+	zoneID, err := getZoneID(cfg.ZoneName, cfg.APIToken)
+	if err != nil {
+		return err
+	}
+
+	recordData, err := getRecordData(zoneID, cfg.RecordName, cfg.APIToken)
+	if err != nil {
+		return err
+	}
+
+	if recordData == nil {
+		log.Println("[INFO] Record does not exist. Creating...")
+
+		err := createDNSRecord(zoneID, cfg.RecordName, publicIP, cfg.APIToken)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	if recordData.Content == publicIP {
+		log.Printf("[INFO] IP not changed (%s). Skipping.", publicIP)
+
+		return nil
+	}
+
+	log.Printf("[INFO] IP changed (%s -> %s). Updating...", recordData.Content, publicIP)
+
+	err = updateDNSRecord(zoneID, cfg.RecordName, recordData.ID, publicIP, cfg.APIToken)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func main() {
 	cfg, err := getEnvVars()
 	if err != nil {
 		log.Fatalf("[FATAL] %v", err)
 	}
 
-	publicIP, err := getPublicIP()
-	if err != nil {
-		log.Fatalf("[FATAL] %v", err)
-	}
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
-	zoneID, err := getZoneID(cfg.ZoneName, cfg.APIToken)
-	if err != nil {
-		log.Fatalf("[FATAL] %v", err)
-	}
+	for {
+		<-timer.C
 
-	recordData, err := getRecordData(zoneID, cfg.RecordName, cfg.APIToken)
-	if err != nil {
-		log.Fatalf("[FATAL] %v", err)
-	}
-
-	if recordData == nil {
-		log.Println("[INFO] Record does not exist. Creating...")
-		if err := createDNSRecord(zoneID, cfg.RecordName, publicIP, cfg.APIToken); err != nil {
-			log.Fatalf("[FATAL] %v", err)
+		err := run(cfg)
+		if err != nil {
+			log.Printf("[ERROR] %v", err)
 		}
-		return
-	}
-	if recordData.Content == publicIP {
-		log.Printf("[INFO] IP not changed (%s).", publicIP)
-		return
-	}
-	log.Printf("[INFO] IP changed (%s -> %s). Updating...", recordData.Content, publicIP)
-	if err := updateDNSRecord(zoneID, cfg.RecordName, recordData.ID, publicIP, cfg.APIToken); err != nil {
-		log.Fatalf("[FATAL] %v", err)
+
+		timer.Reset(cfg.Interval)
 	}
 }
