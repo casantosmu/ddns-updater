@@ -16,7 +16,6 @@ type Config struct {
 	ZoneName   string
 	RecordName string
 	APIToken   string
-	Interval   time.Duration
 }
 
 type CloudflareResponse[T any] struct {
@@ -54,7 +53,6 @@ func getEnvVars() (*Config, error) {
 	zoneName := os.Getenv("ZONE_NAME")
 	recordName := os.Getenv("RECORD_NAME")
 	apiToken := os.Getenv("API_TOKEN")
-	intervalStr := os.Getenv("INTERVAL")
 
 	var missingVars []string
 
@@ -67,24 +65,15 @@ func getEnvVars() (*Config, error) {
 	if apiToken == "" {
 		missingVars = append(missingVars, "API_TOKEN")
 	}
-	if intervalStr == "" {
-		missingVars = append(missingVars, "INTERVAL")
-	}
 
 	if len(missingVars) > 0 {
 		return nil, fmt.Errorf("missing environment variables: %s", strings.Join(missingVars, ", "))
-	}
-
-	interval, err := time.ParseDuration(intervalStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid INTERVAL format (ex: 300s, 5m, 1h): %w", err)
 	}
 
 	return &Config{
 		ZoneName:   zoneName,
 		RecordName: recordName,
 		APIToken:   apiToken,
-		Interval:   interval,
 	}, nil
 }
 
@@ -274,17 +263,8 @@ func main() {
 		log.Fatalf("[FATAL] %v", err)
 	}
 
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-
-	for {
-		<-timer.C
-
-		err := run(cfg)
-		if err != nil {
-			log.Printf("[ERROR] %v", err)
-		}
-
-		timer.Reset(cfg.Interval)
+	err = run(cfg)
+	if err != nil {
+		log.Fatalf("[FATAL] %v", err)
 	}
 }
