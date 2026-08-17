@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -49,10 +50,29 @@ var httpClient = &http.Client{
 
 const cloudflareBaseURL = "https://api.cloudflare.com/client/v4"
 
-func getEnvVars() (*Config, error) {
-	zoneName := os.Getenv("ZONE_NAME")
-	recordName := os.Getenv("RECORD_NAME")
-	apiTokenFile := os.Getenv("API_TOKEN_FILE")
+func getConfig(args []string) (*Config, error) {
+	zoneFlag := flag.String("zone", "", "DNS zone name")
+	recordFlag := flag.String("record", "", "DNS record name")
+	apiTokenFileFlag := flag.String("api-token-file", "", "path to the Cloudflare API token file")
+
+	if err := flag.CommandLine.Parse(args); err != nil {
+		return nil, err
+	}
+
+	zoneName := *zoneFlag
+	if zoneName == "" {
+		zoneName = os.Getenv("ZONE_NAME")
+	}
+
+	recordName := *recordFlag
+	if recordName == "" {
+		recordName = os.Getenv("RECORD_NAME")
+	}
+
+	apiTokenFile := *apiTokenFileFlag
+	if apiTokenFile == "" {
+		apiTokenFile = os.Getenv("API_TOKEN_FILE")
+	}
 
 	var missingVars []string
 
@@ -268,7 +288,7 @@ func run(cfg *Config) error {
 }
 
 func main() {
-	cfg, err := getEnvVars()
+	cfg, err := getConfig(os.Args[1:])
 	if err != nil {
 		log.Fatalf("[ERROR] %v", err)
 	}
