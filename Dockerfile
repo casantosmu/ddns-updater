@@ -1,15 +1,8 @@
-FROM golang:1.24.5 AS build-stage
-
+FROM golang:1.24.5 AS build
 WORKDIR /app
 COPY . ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /ddns-updater
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /ddns-updater
-
-FROM gcr.io/distroless/base-debian11
-
-WORKDIR /
-COPY --from=build-stage /ddns-updater /ddns-updater
-
-USER nonroot:nonroot
-
+FROM gcr.io/distroless/static-debian13:nonroot
+COPY --from=build /ddns-updater /ddns-updater
 ENTRYPOINT ["/ddns-updater"]
