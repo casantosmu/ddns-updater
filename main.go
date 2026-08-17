@@ -52,7 +52,7 @@ const cloudflareBaseURL = "https://api.cloudflare.com/client/v4"
 func getEnvVars() (*Config, error) {
 	zoneName := os.Getenv("ZONE_NAME")
 	recordName := os.Getenv("RECORD_NAME")
-	apiToken := os.Getenv("API_TOKEN")
+	apiTokenFile := os.Getenv("API_TOKEN_FILE")
 
 	var missingVars []string
 
@@ -62,12 +62,22 @@ func getEnvVars() (*Config, error) {
 	if recordName == "" {
 		missingVars = append(missingVars, "RECORD_NAME")
 	}
-	if apiToken == "" {
-		missingVars = append(missingVars, "API_TOKEN")
+	if apiTokenFile == "" {
+		missingVars = append(missingVars, "API_TOKEN_FILE")
 	}
 
 	if len(missingVars) > 0 {
 		return nil, fmt.Errorf("missing environment variables: %s", strings.Join(missingVars, ", "))
+	}
+
+	tokenData, err := os.ReadFile(apiTokenFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read API token file: %w", err)
+	}
+
+	apiToken := strings.TrimSpace(string(tokenData))
+	if apiToken == "" {
+		return nil, fmt.Errorf("API token file is empty: %s", apiTokenFile)
 	}
 
 	return &Config{
