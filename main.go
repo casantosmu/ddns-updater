@@ -260,11 +260,11 @@ func run(cfg *Config) error {
 func main() {
 	cfg, err := getEnvVars()
 	if err != nil {
-		log.Fatalf("[FATAL] %v", err)
+		log.Fatalf("[ERROR] %v", err)
 	}
 
 	err = run(cfg)
 	if err != nil {
-		log.Fatalf("[FATAL] %v", err)
+		log.Fatalf("[ERROR] %v", err)
 	}
 }
