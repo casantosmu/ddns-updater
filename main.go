@@ -50,6 +50,11 @@ var httpClient = &http.Client{
 
 const cloudflareBaseURL = "https://api.cloudflare.com/client/v4"
 
+const (
+	maxAttempts = 3
+	retryDelay  = 5 * time.Second
+)
+
 func getConfig(args []string) (*Config, error) {
 	zoneFlag := flag.String("zone", "", "DNS zone name")
 	recordFlag := flag.String("record", "", "DNS record name")
@@ -287,13 +292,31 @@ func run(cfg *Config) error {
 	return nil
 }
 
+func runWithRetry(cfg *Config) error {
+	var err error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err = run(cfg)
+		if err == nil {
+			return nil
+		}
+
+		if attempt < maxAttempts {
+			log.Printf("[WARN] Attempt %d/%d failed: %v. Retrying in %s...", attempt, maxAttempts, err, retryDelay)
+			time.Sleep(retryDelay)
+		}
+	}
+
+	return fmt.Errorf("failed after %d attempts: %w", maxAttempts, err)
+}
+
 func main() {
 	cfg, err := getConfig(os.Args[1:])
 	if err != nil {
 		log.Fatalf("[ERROR] %v", err)
 	}
 
-	err = run(cfg)
+	err = runWithRetry(cfg)
 	if err != nil {
 		log.Fatalf("[ERROR] %v", err)
 	}
