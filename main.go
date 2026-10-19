@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,9 +15,9 @@ import (
 )
 
 type Config struct {
-	ZoneName   string
-	RecordName string
-	APIToken   string
+	ZoneName    string
+	RecordNames []string
+	APIToken    string
 }
 
 type CloudflareResponse[T any] struct {
@@ -57,7 +58,7 @@ const (
 
 func getConfig(args []string) (*Config, error) {
 	zoneFlag := flag.String("zone", "", "DNS zone name")
-	recordFlag := flag.String("record", "", "DNS record name")
+	recordFlag := flag.String("record", "", "comma-separated DNS record names")
 	apiTokenFileFlag := flag.String("api-token-file", "", "path to the Cloudflare API token file")
 
 	if err := flag.CommandLine.Parse(args); err != nil {
@@ -69,10 +70,11 @@ func getConfig(args []string) (*Config, error) {
 		zoneName = os.Getenv("ZONE_NAME")
 	}
 
-	recordName := *recordFlag
-	if recordName == "" {
-		recordName = os.Getenv("RECORD_NAME")
+	recordNamesValue := *recordFlag
+	if recordNamesValue == "" {
+		recordNamesValue = os.Getenv("RECORD_NAME")
 	}
+	recordNames := parseRecordNames(recordNamesValue)
 
 	apiTokenFile := *apiTokenFileFlag
 	if apiTokenFile == "" {
@@ -84,7 +86,7 @@ func getConfig(args []string) (*Config, error) {
 	if zoneName == "" {
 		missingVars = append(missingVars, "ZONE_NAME")
 	}
-	if recordName == "" {
+	if len(recordNames) == 0 {
 		missingVars = append(missingVars, "RECORD_NAME")
 	}
 	if apiTokenFile == "" {
@@ -106,10 +108,21 @@ func getConfig(args []string) (*Config, error) {
 	}
 
 	return &Config{
-		ZoneName:   zoneName,
-		RecordName: recordName,
-		APIToken:   apiToken,
+		ZoneName:    zoneName,
+		RecordNames: recordNames,
+		APIToken:    apiToken,
 	}, nil
+}
+
+func parseRecordNames(value string) []string {
+	parts := strings.Split(value, ",")
+	recordNames := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if name := strings.TrimSpace(part); name != "" {
+			recordNames = append(recordNames, name)
+		}
+	}
+	return recordNames
 }
 
 func getPublicIP() (string, error) {
@@ -260,20 +273,26 @@ func run(cfg *Config) error {
 		return err
 	}
 
-	recordData, err := getRecordData(zoneID, cfg.RecordName, cfg.APIToken)
+	recordNames := cfg.RecordNames
+	recordErrors := []error{}
+
+	for _, recordName := range recordNames {
+		if err := updateRecord(zoneID, recordName, publicIP, cfg.APIToken); err != nil {
+			recordErrors = append(recordErrors, fmt.Errorf("failed to update record %q: %w", recordName, err))
+		}
+	}
+	return errors.Join(recordErrors...)
+}
+
+func updateRecord(zoneID, recordName, publicIP, token string) error {
+	recordData, err := getRecordData(zoneID, recordName, token)
 	if err != nil {
 		return err
 	}
 
 	if recordData == nil {
-		log.Println("[INFO] Record does not exist. Creating...")
-
-		err := createDNSRecord(zoneID, cfg.RecordName, publicIP, cfg.APIToken)
-		if err != nil {
-			return err
-		}
-
-		return nil
+		log.Printf("[INFO] Record %q does not exist. Creating...", recordName)
+		return createDNSRecord(zoneID, recordName, publicIP, token)
 	}
 
 	if recordData.Content == publicIP {
@@ -284,12 +303,7 @@ func run(cfg *Config) error {
 
 	log.Printf("[INFO] IP changed (%s -> %s). Updating...", recordData.Content, publicIP)
 
-	err = updateDNSRecord(zoneID, cfg.RecordName, recordData.ID, publicIP, cfg.APIToken)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return updateDNSRecord(zoneID, recordName, recordData.ID, publicIP, token)
 }
 
 func runWithRetry(cfg *Config) error {
